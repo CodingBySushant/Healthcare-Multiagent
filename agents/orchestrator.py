@@ -116,20 +116,36 @@ def run_interrupt(user_id: int, message: str, previous_flow: str) -> dict:
 
 
 def run_food_history(user_id: int, message: str) -> dict:
-    msg = message.lower()
-    # If asking for history → fetch it
-    if any(w in msg for w in ["history", "last meal", "what did i eat", "previous", "log show", "show my"]):
+    from groq import Groq as GroqClient
+    import os
+    # Use LLM to decide: is user asking for history or trying to log a new meal?
+    client = GroqClient(api_key=os.environ.get("GROQ_API_KEY", ""))
+    try:
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content":
+                 "Classify this message. Reply with only one word: 'history' if the user is asking to see past meals/food logs, or 'log' if the user wants to record a new meal they just ate."},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=3, temperature=0,
+        )
+        intent = resp.choices[0].message.content.strip().lower()
+    except Exception:
+        intent = "history"
+
+    if intent == "log":
+        set_session_flow(user_id, "food")
+        return {
+            "agent": "FoodIntakeAgent",
+            "message": "To log your meal, please use the 🥗 Log Food form on the right dashboard — type what you ate in the text box and click Submit. It will automatically estimate your macros!",
+            "flow": "food",
+        }
+    else:
         from agents.food_agent import make_food_agent
         content = _run(make_food_agent(), f"user_id={user_id}. Message: {message}")
         set_session_flow(user_id, "food")
         return {"agent": "FoodIntakeAgent", "message": content, "flow": "food"}
-    # Otherwise redirect to the dashboard food form
-    set_session_flow(user_id, "food")
-    return {
-        "agent": "FoodIntakeAgent",
-        "message": "To log your meal, please use the 🥗 Log Food form on the right dashboard — type what you ate in the text box and click Submit. It will automatically estimate your macros!",
-        "flow": "food",
-    }
 
 
 def run_mealplan_chat(user_id: int, message: str) -> dict:

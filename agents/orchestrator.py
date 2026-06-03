@@ -58,6 +58,8 @@ Classify the LATEST user message into exactly one category and reply with ONLY t
 
 mood       — user expressing or logging emotional state (happy, sad, stressed, tired, angry, great, etc.)
 cgm        — user logging or asking about blood glucose/sugar reading or glucose history
+food       — user asking about their food log, last meal, what they ate, meal history
+mealplan   — user asking to generate, create, or suggest a meal plan or diet plan
 interrupt  — any other question, health advice, general query
 
 {context_note}
@@ -65,7 +67,7 @@ interrupt  — any other question, health advice, general query
 Recent conversation for context:
 {history_str}
 
-Reply with only one word: mood, cgm, or interrupt."""
+Reply with only one word: mood, cgm, food, mealplan, or interrupt."""
 
     try:
         resp = client.chat.completions.create(
@@ -78,11 +80,11 @@ Reply with only one word: mood, cgm, or interrupt."""
             temperature=0,
         )
         intent = resp.choices[0].message.content.strip().lower()
-        if intent in ("mood", "cgm", "interrupt"):
+        if intent in ("mood", "cgm", "food", "mealplan", "interrupt"):
             return intent
     except Exception:
         pass
-    return current_flow if current_flow in ("mood", "cgm") else "interrupt"
+    return current_flow if current_flow in ("mood", "cgm", "food", "mealplan") else "interrupt"
 
 
 # ── Agent runners ─────────────────────────────────────────────────────────────
@@ -113,6 +115,41 @@ def run_interrupt(user_id: int, message: str, previous_flow: str) -> dict:
     return {"agent": "InterruptAgent", "message": content, "flow": previous_flow}
 
 
+def run_food_history(user_id: int, message: str) -> dict:
+    from agents.food_agent import make_food_agent
+    content = _run(make_food_agent(), f"user_id={user_id}. Message: {message}")
+    set_session_flow(user_id, "food")
+    return {"agent": "FoodIntakeAgent", "message": content, "flow": "food"}
+
+
+def run_mealplan_chat(user_id: int, message: str) -> dict:
+    from agents.meal_planner_agent import generate_meal_plan_direct
+    result = generate_meal_plan_direct(user_id)
+    if "error" in result:
+        return {"agent": "MealPlannerAgent", "message": result["error"], "flow": "meal_plan"}
+    plan = result.get("plan", {})
+    lines = []
+    if plan.get("plan_reason"):
+        lines.append(plan["plan_reason"])
+    for meal in plan.get("meals", []):
+        m = meal
+        lines.append(f"
+{m['meal_type']}: {m['name']}")
+        lines.append(f"  Ingredients: {', '.join(m.get('ingredients', []))}")
+        macro = m.get("macros", {})
+        lines.append(f"  Macros: {macro.get('carbs_g',0)}g carbs | {macro.get('protein_g',0)}g protein | {macro.get('fat_g',0)}g fat | {macro.get('calories_kcal',0)} kcal")
+        lines.append(f"  Why: {m.get('reason','')}")
+    if plan.get("hydration_tip"):
+        lines.append(f"
+💧 {plan['hydration_tip']}")
+    if plan.get("alert"):
+        lines.append(f"
+⚠️ {plan['alert']}")
+    set_session_flow(user_id, "meal_plan")
+    return {"agent": "MealPlannerAgent", "message": "
+".join(lines), "flow": "meal_plan"}
+
+
 # ── FastAPI ───────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="HealthPulse API", version="4.0.0")
@@ -130,8 +167,10 @@ async def _ck_chat(user_id: int, message: str) -> str:
     flow     = get_session_flow(uid)
     history  = session.get("history", [])
     intent   = classify_intent(message, flow, history)
-    if intent == "mood": return run_mood(uid, message)["message"]
-    if intent == "cgm":  return run_cgm(uid, message)["message"]
+    if intent == "mood":     return run_mood(uid, message)["message"]
+    if intent == "cgm":      return run_cgm(uid, message)["message"]
+    if intent == "food":     return run_food_history(uid, message)["message"]
+    if intent == "mealplan": return run_mealplan_chat(uid, message)["message"]
     return run_interrupt(uid, message, flow)["message"]
 
 sdk = CopilotKitRemoteEndpoint(actions=[
@@ -191,9 +230,11 @@ def chat(req: ChatRequest):
     flow    = get_session_flow(uid)
     intent  = classify_intent(req.message, flow, history)
 
-    if intent == "mood":   result = run_mood(uid, req.message)
-    elif intent == "cgm":  result = run_cgm(uid, req.message)
-    else:                  result = run_interrupt(uid, req.message, flow)
+    if intent == "mood":        result = run_mood(uid, req.message)
+    elif intent == "cgm":       result = run_cgm(uid, req.message)
+    elif intent == "food":      result = run_food_history(uid, req.message)
+    elif intent == "mealplan":  result = run_mealplan_chat(uid, req.message)
+    else:                       result = run_interrupt(uid, req.message, flow)
 
     # Append to session history (keep last MAX_HISTORY*2 messages)
     history.append({"role": "user",      "text": req.message})

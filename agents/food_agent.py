@@ -52,8 +52,15 @@ Respond ONLY with valid JSON (no markdown):
 
 @tool
 def get_recent_meals(user_id: int) -> dict:
-    """Return the last 10 food log entries."""
-    return {"meals": get_food_history(user_id, limit=10)}
+    """Return the last 10 food log entries formatted for display."""
+    meals = get_food_history(user_id, limit=10)
+    formatted = [
+        f"{m['logged_at'][:16].replace('T',' ')} — {m['description']} "
+        f"({m['carbs_g'] or 0}g carbs, {m['protein_g'] or 0}g protein, "
+        f"{m['fat_g'] or 0}g fat)"
+        for m in reversed(meals)
+    ]
+    return {"count": len(meals), "meals": formatted}
 
 
 def make_food_agent() -> Agent:
@@ -62,11 +69,15 @@ def make_food_agent() -> Agent:
         model=Groq(id="llama-3.3-70b-versatile", api_key=GROQ_API_KEY),
         tools=[log_and_estimate, get_recent_meals],
         instructions=[
-            "Call log_and_estimate with user_id and the meal description from the message.",
-            "Output in EXACTLY this format:",
+            "You have two tools: log_and_estimate and get_recent_meals.",
+            "Rule 1: If the message describes food/meal the user ate → call log_and_estimate.",
+            "Rule 2: If the message asks for food history, last meal, what they ate → call get_recent_meals.",
+            "For logging, output EXACTLY:",
             "✅ <dish_name>",
             "Carbs: <carbs>g | Protein: <protein>g | Fat: <fat>g | <calories> kcal",
             "If flag is not empty, add it on a new line.",
+            "For history, output each meal on its own line as:",
+            "<date time> — <dish name> (<carbs>g carbs, <protein>g protein, <fat>g fat, <calories> kcal)",
             "No extra words. No headers. No bullet points.",
         ],
         markdown=False,

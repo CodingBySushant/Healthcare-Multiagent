@@ -116,38 +116,29 @@ def run_interrupt(user_id: int, message: str, previous_flow: str) -> dict:
 
 
 def run_food_history(user_id: int, message: str) -> dict:
-    from agents.food_agent import make_food_agent
-    content = _run(make_food_agent(), f"user_id={user_id}. Message: {message}")
+    msg = message.lower()
+    # If asking for history → fetch it
+    if any(w in msg for w in ["history", "last meal", "what did i eat", "previous", "log show", "show my"]):
+        from agents.food_agent import make_food_agent
+        content = _run(make_food_agent(), f"user_id={user_id}. Message: {message}")
+        set_session_flow(user_id, "food")
+        return {"agent": "FoodIntakeAgent", "message": content, "flow": "food"}
+    # Otherwise redirect to the dashboard food form
     set_session_flow(user_id, "food")
-    return {"agent": "FoodIntakeAgent", "message": content, "flow": "food"}
+    return {
+        "agent": "FoodIntakeAgent",
+        "message": "To log your meal, please use the 🥗 Log Food form on the right dashboard — type what you ate in the text box and click Submit. It will automatically estimate your macros!",
+        "flow": "food",
+    }
 
 
 def run_mealplan_chat(user_id: int, message: str) -> dict:
-    from agents.meal_planner_agent import generate_meal_plan_direct
-    result = generate_meal_plan_direct(user_id)
-    if "error" in result:
-        return {"agent": "MealPlannerAgent", "message": result["error"], "flow": "meal_plan"}
-    plan = result.get("plan", {})
-    lines = []
-    if plan.get("plan_reason"):
-        lines.append(plan["plan_reason"])
-    for meal in plan.get("meals", []):
-        m = meal
-        lines.append(f"
-{m['meal_type']}: {m['name']}")
-        lines.append(f"  Ingredients: {', '.join(m.get('ingredients', []))}")
-        macro = m.get("macros", {})
-        lines.append(f"  Macros: {macro.get('carbs_g',0)}g carbs | {macro.get('protein_g',0)}g protein | {macro.get('fat_g',0)}g fat | {macro.get('calories_kcal',0)} kcal")
-        lines.append(f"  Why: {m.get('reason','')}")
-    if plan.get("hydration_tip"):
-        lines.append(f"
-💧 {plan['hydration_tip']}")
-    if plan.get("alert"):
-        lines.append(f"
-⚠️ {plan['alert']}")
     set_session_flow(user_id, "meal_plan")
-    return {"agent": "MealPlannerAgent", "message": "
-".join(lines), "flow": "meal_plan"}
+    return {
+        "agent": "MealPlannerAgent",
+        "message": "Your meal plan is ready! 🍽️ Click the **Generate Meal Plan** button on the right dashboard to see your personalised 3-meal plan with ingredients, macros, and clinical reasons.",
+        "flow": "meal_plan",
+    }
 
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
@@ -250,8 +241,10 @@ def chat(req: ChatRequest):
 
 @app.post("/meal-plan")
 def meal_plan(req: ChatRequest):
-    if req.user_id is None or req.user_id not in sessions:
-        raise HTTPException(400, "Not logged in")
+    if req.user_id is None:
+        raise HTTPException(400, "user_id required")
+    if not user_exists(req.user_id):
+        raise HTTPException(404, "User not found")
     from agents.meal_planner_agent import generate_meal_plan_direct
     custom_pref = req.message if req.message and req.message != "generate" else None
     result = generate_meal_plan_direct(req.user_id, custom_pref=custom_pref)
@@ -270,6 +263,27 @@ def food_log(req: ChatRequest):
     content = _run(make_food_agent(), f"user_id={req.user_id}. {req.message}")
     return {"agent": "FoodIntakeAgent", "message": content}
 
+
+# ── /meal-swap ────────────────────────────────────────────────────────────────
+
+class MealSwapRequest(BaseModel):
+    user_id: int
+    meal_type: str          # Breakfast | Lunch | Dinner
+    requested_ingredient: str
+    current_plan: dict      # the full plan object currently shown
+
+@app.post("/meal-swap")
+def meal_swap(req: MealSwapRequest):
+    if not user_exists(req.user_id):
+        raise HTTPException(404, "User not found")
+    from agents.meal_planner_agent import swap_single_meal
+    result = swap_single_meal(
+        req.user_id, req.meal_type,
+        req.requested_ingredient, req.current_plan
+    )
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+    return result
 
 # ── Data endpoints ────────────────────────────────────────────────────────────
 

@@ -102,9 +102,43 @@ const AGENT_COLORS = {
   System:           '#6b7280',
 }
 
-function MealPlanCard({ plan }) {
+function MealPlanCard({ plan, userId, onMealSwapped }) {
   if (!plan) return null
   const { plan_reason, meals, hydration_tip, alert } = plan.plan || plan
+  const [swapInputs,  setSwapInputs]  = useState({})
+  const [swapLoading, setSwapLoading] = useState({})
+  const [swapMsg,     setSwapMsg]     = useState({})
+
+  const handleSwap = async (mealType) => {
+    const ingredient = (swapInputs[mealType] || '').trim()
+    if (!ingredient) return
+    setSwapLoading(prev => ({ ...prev, [mealType]: true }))
+    setSwapMsg(prev => ({ ...prev, [mealType]: '' }))
+    try {
+      const res = await fetch(`${API}/meal-swap`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          meal_type: mealType,
+          requested_ingredient: ingredient,
+          current_plan: plan.plan || plan,
+        }),
+      })
+      const data = await res.json()
+      if (data.swapped) {
+        setSwapMsg(prev => ({ ...prev, [mealType]: '✅ Meal swapped!' }))
+        setSwapInputs(prev => ({ ...prev, [mealType]: '' }))
+        if (onMealSwapped) onMealSwapped(mealType, data.meal)
+      } else {
+        setSwapMsg(prev => ({ ...prev, [mealType]: '⚠️ ' + data.reason }))
+      }
+    } catch {
+      setSwapMsg(prev => ({ ...prev, [mealType]: '❌ Could not process swap.' }))
+    } finally {
+      setSwapLoading(prev => ({ ...prev, [mealType]: false }))
+    }
+  }
+
   return (
     <div className="mp-result">
       {plan_reason && <div className="mp-rationale">{plan_reason}</div>}
@@ -117,15 +151,39 @@ function MealPlanCard({ plan }) {
           </div>
           <div className="meal-card-body">
             <div className="meal-name">{m.name}</div>
-            <div className="meal-ingredients">
-              {(m.ingredients || []).join(', ')}
-            </div>
+            <div className="meal-ingredients">{(m.ingredients || []).join(', ')}</div>
             <div className="meal-macros">
               <span className="macro-pill">🍞 {m.macros?.carbs_g}g carbs</span>
               <span className="macro-pill">💪 {m.macros?.protein_g}g protein</span>
               <span className="macro-pill">🧈 {m.macros?.fat_g}g fat</span>
             </div>
             <div className="meal-reason">Why: {m.reason}</div>
+            {/* Swap row */}
+            <div style={{ display:'flex', gap:6, marginTop:8, alignItems:'center' }}>
+              <input
+                value={swapInputs[m.meal_type] || ''}
+                onChange={e => setSwapInputs(prev => ({ ...prev, [m.meal_type]: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && handleSwap(m.meal_type)}
+                placeholder={`Swap ${m.meal_type} ingredient... (e.g. mutton)`}
+                style={{ flex:1, padding:'5px 9px', border:'1px solid #ccc', borderRadius:6,
+                         fontSize:11, outline:'none' }}
+              />
+              <button
+                onClick={() => handleSwap(m.meal_type)}
+                disabled={swapLoading[m.meal_type] || !swapInputs[m.meal_type]?.trim()}
+                style={{ padding:'5px 10px', background:'#1a7a4a', color:'#fff',
+                         border:'none', borderRadius:6, fontSize:11, cursor:'pointer',
+                         whiteSpace:'nowrap' }}>
+                {swapLoading[m.meal_type] ? '…' : '🔄 Swap'}
+              </button>
+            </div>
+            {swapMsg[m.meal_type] && (
+              <p style={{ fontSize:11, marginTop:4,
+                          color: swapMsg[m.meal_type].startsWith('✅') ? '#1a7a4a' :
+                                 swapMsg[m.meal_type].startsWith('⚠️') ? '#b45309' : '#c0392b' }}>
+                {swapMsg[m.meal_type]}
+              </p>
+            )}
           </div>
         </div>
       ))}
@@ -228,7 +286,10 @@ export default function Dashboard({ userId, user, onUserSet }) {
 
   // Meal plan — phase 1
   const getMealPlan = async () => {
-    if (!userId) return
+    if (!userId) {
+      setMealData({ error: '❌ Please log in first.' })
+      return
+    }
     setMealLoading(true)
     setMealData(null)
     setMeal2Data(null)
@@ -239,11 +300,16 @@ export default function Dashboard({ userId, user, onUserSet }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: userId, message: 'generate' }),
       })
-      if (!res.ok) throw new Error()
-      setMealData(await res.json())
+      const data = await res.json()
+      if (!res.ok) {
+        setMealData({ error: '❌ ' + (data.detail || 'Could not generate meal plan.') })
+        setMealPhase('idle')
+        return
+      }
+      setMealData(data)
       setMealPhase('asking')
-    } catch {
-      setMealData({ error: '❌ Could not generate meal plan.' })
+    } catch (e) {
+      setMealData({ error: '❌ Network error: ' + e.message })
       setMealPhase('idle')
     } finally {
       setMealLoading(false)
@@ -454,7 +520,20 @@ export default function Dashboard({ userId, user, onUserSet }) {
                             Plan based on "{meal2Data._pref_label}":
                           </p>
                         )}
-                        <MealPlanCard plan={meal2Data || mealData} />
+                        <MealPlanCard
+                          plan={meal2Data || mealData}
+                          userId={userId}
+                          onMealSwapped={(mealType, newMeal) => {
+                            const active = meal2Data || mealData
+                            const updated = JSON.parse(JSON.stringify(active))
+                            const planObj = updated.plan || updated
+                            planObj.meals = planObj.meals.map(m =>
+                              m.meal_type === mealType ? newMeal : m
+                            )
+                            if (meal2Data) setMeal2Data(updated)
+                            else setMealData(updated)
+                          }}
+                        />
 
                         {/* Always-visible preference follow-up */}
                         {mealPhase === 'asking' && (

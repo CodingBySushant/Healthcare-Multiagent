@@ -1,0 +1,52 @@
+{
+  "agents": [
+    {
+      "name": "GreetingAgent",
+      "description": "Validates user ID and greets user by name with city and conditions",
+      "inputs": { "user_id": "integer (1-100)" },
+      "outputs": { "greeting": "string", "user_profile": "object" },
+      "tools": ["greet_by_id"],
+      "trigger": "Login / first message"
+    },
+    {
+      "name": "MoodTrackerAgent",
+      "description": "Captures user mood, stores with numeric score, computes rolling average",
+      "inputs": { "user_id": "integer", "mood_expression": "free-text string" },
+      "outputs": { "mood": "string", "score": "integer 1-10", "rolling_avg": "float", "trend": "string" },
+      "tools": ["record_mood"],
+      "trigger": "LLM classifier detects emotional expression"
+    },
+    {
+      "name": "CGMAgent",
+      "description": "Logs glucose readings (valid range 80-300 mg/dL), flags alerts, returns history",
+      "inputs": { "user_id": "integer", "reading": "integer mg/dL" },
+      "outputs": { "reading": "integer", "status": "string", "alert": "boolean" },
+      "tools": ["log_glucose_reading", "fetch_glucose_history"],
+      "trigger": "LLM classifier detects glucose/sugar mention or number"
+    },
+    {
+      "name": "FoodIntakeAgent",
+      "description": "Records meals with timestamps, estimates macronutrients via LLM, flags high-carb for diabetics",
+      "inputs": { "user_id": "integer", "description": "free-text meal description", "logged_at": "ISO timestamp (optional)" },
+      "outputs": { "dish_name": "string", "carbs_g": "float", "protein_g": "float", "fat_g": "float", "calories_kcal": "integer", "flag": "string" },
+      "tools": ["log_and_estimate"],
+      "trigger": "Food log form submission on dashboard"
+    },
+    {
+      "name": "MealPlannerAgent",
+      "description": "Generates adaptive 3-meal daily plan based on conditions, CGM, mood, and dietary preference with clinical rationale",
+      "inputs": { "user_id": "integer", "custom_pref": "string (optional)" },
+      "outputs": { "plan_reason": "string", "meals": "array of 3 meal objects", "hydration_tip": "string", "alert": "string" },
+      "tools": ["generate_meal_plan_direct (direct Groq call)"],
+      "trigger": "Generate Meal Plan button on dashboard"
+    },
+    {
+      "name": "InterruptAgent",
+      "description": "Handles general health queries at any point using user's stored medical profile. Routes user back to previous flow after answering.",
+      "inputs": { "user_id": "integer", "query": "free-text question", "previous_flow": "string" },
+      "outputs": { "answer": "string", "resume_message": "string" },
+      "tools": ["answer_query"],
+      "trigger": "LLM classifier detects general question or advice request"
+    }
+  ]
+}

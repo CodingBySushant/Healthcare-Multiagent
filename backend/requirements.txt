@@ -1,0 +1,8 @@
+fastapi==0.136.3
+uvicorn[standard]==0.29.0
+agno==2.6.10
+groq==1.4.0
+copilotkit==0.1.93
+faker==25.0.0
+pydantic==2.7.0
+python-multipart==0.0.9
